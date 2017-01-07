@@ -1,2 +1,2 @@
 # MachineLearningTutorials
-Tutorials presenting a wide variety of concepts in machine learning.
+Tutorials presenting a variety of concepts in machine learning.
