@@ -1,0 +1,201 @@
+---
+title: "Implementing Logistic Regression from Scratch in R"
+output: html_notebook
+---
+In binary logistic regression, we seek to predict the class label $y \in \{0, 1\}$ associated to a data point $x$ according to the function $$y(x) = \sigma (w^Tx) = \frac{1}{1+e^{-w^Tx}}$$
+Here $w$ is a weight vector which parametrizes our model.
+The motivation behind logistic regression is that for binary classification tasks in which we must assign to each input $x$ a class label $y \in \{0, 1\}$, we would like to be able to estimate the posterior probabilities as
+
+$$p(y=0 | x) = \sigma(w^Tx) \quad \text{and} \quad p(y=1 | x) = 1 - \sigma(w^Tx)$$
+The sigmoidal non-linearity applied to the weighted input achieves this by squashing the output so that it lies in the range $(0, 1)$. Another way to specify this model is in terms of the *logit* transformation
+
+$$\log{\frac{p(y=0 | x)}{p(y=1 | x)}} = w^Tx $$
+As usual, we append a 1 to the vector representation of $x$ in order to account for the bias term in $w$. For training the model we use the cross-entropy loss function, defined as 
+$$J(w) = -\sum_{i=1}^N \left \{ t_i \log y_i + (1 - t_i) \log (1 - y_i) \right \}$$
+
+One way to motivate the cross-entropy loss is via maximum likelihood. Given our model which defines
+
+$$p(y =0| x) = \frac{1}{1 + e^{-w^Tx}}$$
+and a training set $\{x_i, t_i\}_{i=1}^N$ where $x_i \in \mathbb{R}^n$ and $t_i \in \{0, 1\}$ is our target class assignment, we can specify the likelihood function as
+
+$$\mathcal{L}(w)  = \prod_{i=1}^N y_i^{t_i} (1 - y_i)^{1-t_i}$$
+where $y_i = p(y = 0 | x_i)$. Taking the log of the likelihood gives
+$$\log \mathcal{L}(w) = - J(w)$$
+So it turns out that maximizing the log-likelihood function using MLE is equivalent to minimizing the cross-entropy loss function!
+
+We will use logistic regression to classify points from a two-class subset of the Iris dataset. We will only use two features of the data: the sepal length and the sepal width. The two classes and their corresponding data points are plotted below.
+
+```{r}
+library(ggvis)
+data <- iris[ which(iris$Species == 'setosa' | iris$Species == 'versicolor'),]
+data %>% ggvis(~Sepal.Length, ~Sepal.Width, fill = ~Species) %>% layer_points()
+```
+
+## Gradient Descent
+As you can see, there exists a clear linear separation between the two classes. Logistic regression should work quite nicely here.
+
+In order to fully specify our model, we need to find the $w$ which minimizes the cost function $J$. To do so, we take the gradient with respect to $w$ of $J$ which yields
+$$\nabla J = \sum_{i=1}^N (y_i - t_i)x_i$$
+Remember that here there exists a nonlinear dependence of $y_i$ on $w$ through the sigmoid function. As such, there is no way to set the gradient of $J$ equal to zero and solve for a nice, closed-form solution for $w$. As such, we need to result to iterative methods to minimize $J$. A couple of ways of accomplishing this exist. The first is to use gradient descent and update $w$ according to the rule
+$$w \leftarrow w - \eta \nabla J$$
+We pursue this method here. First we preprocess our data. We create a matrix $X$ whose columns are the $x_i$ of our training set. To this matrix we append a row of ones which will allow us to efficiently compute the bias term in our weight vector $w$. We also create a vector `targets` which holds the class labels $t_i$ of each point in our training set. We initialize our weight vector $w$ to all zeros. Finally, we shuffle our data which will help our stochastic gradient descent update converge faster.
+
+```{r}
+# Select the Sepal Length and Width columns from the data frame
+X <- data.matrix(data[,c("Sepal.Length", "Sepal.Width")])
+
+# Append a column of ones to X
+ones <- matrix(1, dim(X)[1], 1)
+X <- cbind(X, ones)
+
+# Create the target vector of class labels
+# Setosa maps to 1 and versicolor maps to 0
+targets <- as.numeric(data$Species == "setosa")
+
+# Shuffle X and targets concurrently
+nr <- dim(X)[1]
+idx <- sample.int(nr)
+X <- X[idx,]
+targets <- targets[idx]
+
+# Initialize the weight vector
+w <- matrix(0, dim(X)[2], 1)
+
+# Transpose X so that the x_i are columns
+X <- t(X)
+```
+
+Below is the code which trains our logistic regression model. We begin by specifying functions which compute $\sigma$, $J$, and $\nabla J$. We then write a function which performs gradient descent. To ensure that the update doesn't get stuck oscillating back and forth between two values, we halve $\eta$ every 10 iterations. We also specify an epsilon value which determines convergence. Finally, we define a function $f(w, x)$ which computes the decision boundary having normal vector $w$ determined by our logistic regression model.
+
+```{r}
+sigmoid <- function(x) {
+  1 / (1 + exp(-x))
+}
+
+y <- function(w, X) {
+  t(sigmoid(t(w) %*% X))
+}
+
+J <- function(target, w, X) {
+ y_vals <- y(w, X)
+ t(target) %*% log(y_vals) + t(1 - target) %*% log(1 - y_vals)  
+}
+
+grad_J <- function(target, w, X) {
+  X %*% (y(w, X) - target)
+}
+
+grad_descent <- function(target, w, X, eta=0.1, eps=1e-4) {
+  diff <- 1
+  i <- 0
+  while (diff > eps) {
+    if (i %% 10 == 0) {
+      eta <- 0.5 * eta
+    }
+    w_new <- w - eta * grad_J(target, w, X)
+    diff <- max(abs(w_new - w))
+    w <- w_new
+    i <- i + 1
+  }
+  w_new
+}
+
+f <- function(w, x) {
+  (-w[3] - w[1] * x) / w[2]
+}
+```
+
+Having defined our model's computations, we calculate the optimal weight vector $w_{opt}$ and use it to predict the class labels of our original data points
+contained in $X$. We then compute the number of misclassifications the model makes.
+```{r}
+# Calculate w_opt using gradient descent
+w_opt <- grad_descent(targets, w, X)
+
+# Use y(w_opt, X) to predict the class labels of our dataset
+preds <- as.numeric(y(w_opt, X) > 0.5)
+
+# Calculate and print the number of misclassifications
+num_misclassified <- sum(preds != targets)
+print(num_misclassified)
+```
+
+Our model does quite well, making only one misclassification. We can now use the function $f(w, x)$ to plot the computed decision boundary.
+
+```{r}
+x <- seq(4, 7.5, length=50)
+line_x <- as.vector(x)
+line_y <- as.vector(f(w_opt, x))
+data$line_x <- line_x
+data$line_y <- line_y
+data %>% ggvis(~Sepal.Length, ~Sepal.Width, fill = ~Species) %>% layer_points() %>% layer_paths(data=data, x=~line_x, y=~line_y)
+```
+And there you have it! We can see the one misclassified *Setosa* point in the bottom-left corner of the plot.
+
+## Newton-Raphson Method
+A second and often more efficient way of determining $w_{opt}$ is to use the Newton-Raphson method. In this case, the update is termed *Iterative Reweighted Least Squares* and is given by
+$$w \leftarrow w - \mathbf{H}^{-1}\nabla J$$ where $\mathbf{H}$ is the Hessian matrix consisting of the second derivatives with respect to $w$ of the loss function $J$.
+
+Recall that we have
+$$\nabla J = \sum_{i=1}^N (y_i - t_i) x_i$$
+In matrix-vector notation, this can be rewritten as
+$$ \nabla J = X(y - t)$$
+From this we can derive the Hessian to get
+$$ \nabla^2 J = \sum_{i=1}^N y_i(1-y_i)x_i x_i^T = XRX^T$$
+where $R$ is an $N \times N$ diagonal matrix having elements
+$$R_{ii} = y_i(1 - y_i)$$
+By properties of the sigmoid function, $0 < y_i < 1$ for all $i$. This implies that $u^T \mathbf{H} u > 0$ for any vector $u \neq \mathbf{0}$, so $\mathbf{H}$ is positive definite. This means that $J$ is convex and that there exists a unique optimum $w_{opt}$ which minimizes $J$. It also guarantees that the Newton-Raphson will converge.
+
+Now that we know $\mathbf{H}$, we can calculate our update rule for $w$. We get
+\begin{align*}
+  w &\leftarrow w - (XRX^T)^{-1}X(y-t) \\
+    &\leftarrow (XRX^T)^{-1}(XRX^Tw - X(y - t)) \\
+    &\leftarrow (XRX^T)^{-1}XRz
+\end{align*}
+where $z = X^Tw - R^{-1}(y - t)$. This looks like the closed-form solution to the weighted least-squares problem, except for the fact that both $R$ and $z$ depend on $w$. Because of this dependence, the algorithm is sometimes called *iterative reweighted least squares* or IRLS in reference to its resemblance to the least squares problem but differentiated via the iterative reweighting factor $R$ which depends itself on $w$.
+
+Now, we implement IRLS in code and compare the solution it gives to that computed by gradient descent. Each time we computer $R$, we add a small constant of 1e-4 to the diagonal to cope with numerical instability and prevent computational issues related to matrix singularity.
+
+```{r}
+IRLS <- function(target, w, X, eps=1e-3) {
+  diff <- 1
+  i <- 0
+  while (diff > eps) {
+     R <- diag(as.vector(y(w, X) * (1 - y(w, X))), dim(X)[2], dim(X)[2])
+     R <- R + diag(.0001, dim(X)[2], dim(X)[2])
+     H <- X %*% R %*% t(X)
+     w_new <- w - solve(H) %*% grad_J(target, w, X)
+     diff <- max(abs(w_new - w))
+     w <- w_new
+     i <- i + 1
+  }
+  w_new
+}
+```
+
+Now we can compute a new optimum $w_{newt}$ using IRLS. 
+```{r}
+# Calculate w_opt using gradient descent
+w_newt <- IRLS(targets, w, X)
+
+# Use y(w_opt, X) to predict the class labels of our dataset
+preds <- as.numeric(y(w_newt, X) > 0.5)
+
+# Calculate and print the number of misclassifications
+num_misclassified <- sum(preds != targets)
+print(num_misclassified)
+```
+
+This method actually does better than gradient descent and makes no misclassifications! Amazing! Let's plot the resultant decision boundary.
+
+```{r}
+x <- seq(4, 7.5, length=50)
+line_x <- as.vector(x)
+line_y <- as.vector(f(w_newt, x))
+data$line_x <- line_x
+data$line_y <- line_y
+data %>% ggvis(~Sepal.Length, ~Sepal.Width, fill = ~Species) %>% layer_points() %>% layer_paths(data=data, x=~line_x, y=~line_y)
+```
+
+
+
+
